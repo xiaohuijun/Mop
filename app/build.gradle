@@ -1,0 +1,38 @@
+apply plugin: 'com.android.application'
+
+android {
+    compileSdkVersion rootProject.ext.app.compileSdkVersion
+    defaultConfig {
+        applicationId "com.test.example"
+        minSdkVersion rootProject.ext.app.minSdkVersion
+        targetSdkVersion rootProject.ext.app.targetSdkVersion
+        versionCode rootProject.ext.app.versionCode
+        versionName rootProject.ext.app.versionName
+        manifestPlaceholders = [
+                qq_id: "100000000",
+        ]
+    }
+    buildTypes {
+        release {
+            minifyEnabled false
+            proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
+        }
+    }
+}
+
+dependencies {
+    api fileTree(include: ['*.jar'], dir: 'libs')
+    api 'com.android.support:appcompat-v7:' + rootProject.ext.frameworkcore.supportLibVersion
+    api 'com.android.support:support-v4:' + rootProject.ext.frameworkcore.supportLibVersion
+    api 'com.android.support:support-annotations:' + rootProject.ext.frameworkcore.supportLibVersion
+    api 'com.squareup.okhttp3:okhttp:' + rootProject.ext.frameworkcore.okHttpVersion
+    api 'com.squareup.retrofit2:retrofit:' + rootProject.ext.frameworkcore.retrofitVersion
+    api 'com.squareup.retrofit2:converter-gson:' + rootProject.ext.frameworkcore.retrofitVersion
+    api 'com.squareup.retrofit2:adapter-rxjava2:' + rootProject.ext.frameworkcore.retrofitVersion
+    api 'com.squareup.okhttp3:logging-interceptor:' + rootProject.ext.frameworkcore.loggingInterceptor
+    api 'io.reactivex.rxjava2:rxandroid:' + rootProject.ext.frameworkcore.rxandroid
+    api 'io.reactivex.rxjava2:rxjava:' + rootProject.ext.frameworkcore.rxjava
+    api project(':MopFrameworkCore')
+    api project(':MopUiCore')
+    implementation project(':MopShare')
+}

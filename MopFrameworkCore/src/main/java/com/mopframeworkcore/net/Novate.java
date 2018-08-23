@@ -1,0 +1,2131 @@
+/*
+ *    Copyright (C) 2016 Tamic
+ *
+ *    link :https://github.com/Tamicer/Novate
+ *
+ *    Licensed under the Apache License, Version 2.0 (the "License");
+ *    you may not use this file except in compliance with the License.
+ *    You may obtain a copy of the License at
+ *
+ *        http://www.apache.org/licenses/LICENSE-2.0
+ *
+ *    Unless required by applicable law or agreed to in writing, software
+ *    distributed under the License is distributed on an "AS IS" BASIS,
+ *    WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ *    See the License for the specific language governing permissions and
+ *    limitations under the License.
+ */
+
+package com.mopframeworkcore.net;
+
+import android.app.Activity;
+import android.content.Context;
+import android.content.res.Resources;
+import android.support.annotation.NonNull;
+import android.text.TextUtils;
+import android.util.Log;
+
+import com.google.gson.JsonParseException;
+import com.mopframeworkcore.BuildConfig;
+import com.mopframeworkcore.net.Exception.NovateException;
+import com.mopframeworkcore.net.cache.CookieCacheImpl;
+import com.mopframeworkcore.net.callback.ResponseCallback;
+import com.mopframeworkcore.net.config.ConfigLoader;
+import com.mopframeworkcore.net.cookie.AddCookiesInterceptor;
+import com.mopframeworkcore.net.cookie.NovateCookieManager;
+import com.mopframeworkcore.net.cookie.ReceivedCookiesInterceptor;
+import com.mopframeworkcore.net.cookie.SharedPrefsCookiePersistor;
+import com.mopframeworkcore.net.download.DownLoadCallBack;
+import com.mopframeworkcore.net.download.DownSubscriber;
+import com.mopframeworkcore.net.request.NovateRequest;
+import com.mopframeworkcore.net.request.NovateRequestBody;
+import com.mopframeworkcore.net.request.RequestInterceptor;
+import com.mopframeworkcore.net.util.FileUtil;
+import com.mopframeworkcore.net.util.LogWraper;
+import com.mopframeworkcore.net.util.Utils;
+
+import java.io.File;
+import java.io.InputStream;
+import java.net.Proxy;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.Iterator;
+import java.util.List;
+import java.util.Map;
+import java.util.concurrent.Executor;
+import java.util.concurrent.TimeUnit;
+
+import javax.net.ssl.HostnameVerifier;
+import javax.net.ssl.SSLSocketFactory;
+
+import io.reactivex.Observable;
+import io.reactivex.ObservableSource;
+import io.reactivex.ObservableTransformer;
+import io.reactivex.android.schedulers.AndroidSchedulers;
+import io.reactivex.disposables.Disposable;
+import io.reactivex.functions.Consumer;
+import io.reactivex.functions.Function;
+import io.reactivex.schedulers.Schedulers;
+import okhttp3.Cache;
+import okhttp3.CertificatePinner;
+import okhttp3.ConnectionPool;
+import okhttp3.HttpUrl;
+import okhttp3.Interceptor;
+import okhttp3.MultipartBody;
+import okhttp3.OkHttpClient;
+import okhttp3.RequestBody;
+import okhttp3.ResponseBody;
+import okhttp3.logging.HttpLoggingInterceptor;
+import retrofit2.Call;
+import retrofit2.CallAdapter;
+import retrofit2.Converter;
+import retrofit2.Retrofit;
+import retrofit2.adapter.rxjava2.RxJava2CallAdapterFactory;
+import retrofit2.converter.gson.GsonConverterFactory;
+import retrofit2.http.FieldMap;
+import retrofit2.http.Part;
+
+
+/**
+ * Novate adapts a Java interface to Retrofit call by using annotations on the declared methods to
+ * define how requests are made. Create instances using {@linkplain Builder
+ * the builder} and pass your interface to {@link #} to generate an implementation.
+ * <p/>
+ * For example,
+ * <pre>{@code
+ * Novate novate = new Novate.Builder()
+ *     .baseUrl("http://api.example.com")
+ *     .addConverterFactory(GsonConverterFactory.create())
+ *     .build();
+ * <p/>
+ * MyApi api = Novate.create(MyApi.class);
+ * Response<User> user = api.getUser().execute();
+ * }</pre>
+ *
+ * @author Tamic (skay5200@163.com)
+ */
+public final class Novate {
+
+    private static Map<String, String> headers;
+    private static Map<String, String> parameters;
+    private static Retrofit.Builder retrofitBuilder;
+    private static Retrofit retrofit;
+    private static OkHttpClient.Builder okhttpBuilder;
+    private static BaseApiService apiManager;
+    private static OkHttpClient okHttpClient;
+    private static Context mContext;
+    private final okhttp3.Call.Factory callFactory;
+    private final String baseUrl;
+    private final List<Converter.Factory> converterFactories;
+    private final List<CallAdapter.Factory> adapterFactories;
+    private final Executor callbackExecutor;
+    private final boolean validateEagerly;
+    private Observable<ResponseBody> downObservable;
+    private Map<Object, Observable<ResponseBody>> downMaps = new HashMap<Object, Observable<ResponseBody>>() {
+
+    };
+    private ObservableTransformer exceptTransformer = null;
+
+    public static final String KEY_CACHE = "Novate_Http_cache";
+    private static final int DEFAULT_TIMEOUT = 15;
+    private static final int DEFAULT_MAXIDLE_CONNECTIONS = 5;
+    private static final long DEFAULT_KEEP_ALIVEDURATION = 8;
+    private static final long DEFAULT_CACHEMAXSIZE = 10 * 1024 * 1024;
+    private static int DEFAULT_MAX_STALE = 60 * 60 * 24 * 3;
+    public static final String TAG = "Novate";
+
+    /**
+     * Mandatory constructor for the Novate
+     */
+    Novate(okhttp3.Call.Factory callFactory, String baseUrl, Map<String, String> headers,
+           Map<String, String> parameters, BaseApiService apiManager,
+           List<Converter.Factory> converterFactories, List<CallAdapter.Factory> adapterFactories,
+           Executor callbackExecutor, boolean validateEagerly) {
+        this.callFactory = callFactory;
+        this.baseUrl = baseUrl;
+        this.headers = headers;
+        this.parameters = parameters;
+        this.apiManager = apiManager;
+        this.converterFactories = converterFactories;
+        this.adapterFactories = adapterFactories;
+        this.callbackExecutor = callbackExecutor;
+        this.validateEagerly = validateEagerly;
+    }
+
+    /**
+     * create ApiService
+     */
+    public <T> T create(final Class<T> service) {
+        return retrofit.create(service);
+    }
+
+    /**
+     * @param observable observable
+     * @param subscriber subscriber
+     * @param <T>
+     * @return Subscription
+     */
+    public <T> void call(Observable<T> observable, BaseSubscriber<T> subscriber) {
+        observable.compose(schedulersTransformer)
+                .compose(handleErrTransformer())
+                .subscribe(subscriber);
+    }
+
+
+    /**
+     * @param observable observable
+     * @param callback   callback
+     * @param <T>
+     * @return Subscription.
+     */
+    public <T> void call(Observable<T> observable, ResponseCallback callback) {
+        observable.compose(schedulersTransformer)
+                .compose(handleErrTransformer())
+                .subscribe(new RxSubscriber<T, ResponseBody>(observable.getClass().getSimpleName(), callback));
+    }
+
+    public <T> void call(Object tag, Observable<T> observable, ResponseCallback callback) {
+        observable.compose(schedulersTransformer)
+                .compose(handleErrTransformer())
+                .subscribe(new RxSubscriber<T, ResponseBody>(tag, callback));
+    }
+
+    /**
+     * Thread IO
+     *
+     * @param observable
+     */
+    public <T> Observable<T> schedulersIo(Observable<T> observable) {
+        return observable.subscribeOn(Schedulers.io())
+                .unsubscribeOn(Schedulers.io())
+                .observeOn(Schedulers.io());
+    }
+
+    /**
+     * Thread mainThread
+     *
+     * @param observable
+     */
+    public <T> Observable<T> schedulersMain(Observable<T> observable) {
+        return observable.subscribeOn(Schedulers.io())
+                .unsubscribeOn(Schedulers.io())
+                .observeOn(AndroidSchedulers.mainThread());
+    }
+
+    /**
+     * @param
+     */
+    public <T> void execute(NovateRequest request, ResponseCallback<T, ResponseBody> callback) {
+        call(request, new RxSubscriber<T, ResponseBody>(request.tag(), callback));
+    }
+
+    /**
+     * @param subscriber
+     */
+    public <T> void execute(NovateRequest request, BaseSubscriber<T> subscriber) {
+        call(request, subscriber);
+    }
+
+    /**
+     * call NovateRequest
+     *
+     * @param request
+     * @param subscriber
+     * @param <T>
+     * @return
+     */
+    private <T> void call(NovateRequest request, BaseSubscriber<T> subscriber) {
+        createRx(request)
+                .compose(schedulersTransformer)
+                .compose(handleErrTransformer())
+                .subscribe(subscriber);
+    }
+
+    /**
+     * createRx
+     *
+     * @param request
+     * @return Observable
+     */
+    private Observable<RequestBody> createRx(NovateRequest request) {
+        if (request.method().equals("GET")) {
+            return apiManager.executeGet(request.url(), request.params());
+        }
+        if (request.method().equals("POST")) {
+            return apiManager.executePost(request.url(), request.params());
+        }
+
+        if (request.method().equals("PUT")) {
+            return apiManager.executePut(request.url(), request.params());
+        }
+
+        if (request.method().equals("DELETE")) {
+            return apiManager.executeDelete(request.url(), request.params());
+        }
+        return apiManager.executeGet(request.url(), request.params());
+    }
+
+
+    /**
+     * Novate execute get request
+     *
+     * @param url      path or url
+     * @param callBack ResponseCallback
+     * @param <T>      T return parsed data
+     * @return Subscription
+     */
+    public <T> void rxGet(final String url, ResponseCallback<T, ResponseBody> callBack) {
+        rxGet(url, url, null, callBack);
+    }
+
+    /**
+     * Novate execute get request
+     *
+     * @param url      path or url
+     * @param maps     parameters  maps
+     * @param callBack ResponseCallback
+     * @param <T>      T return parsed data
+     * @return Subscription
+     */
+    public <T> void rxGet(final String url, final Map<String, Object> maps, ResponseCallback<T, ResponseBody> callBack) {
+        rxGet(url, url, maps, callBack);
+    }
+
+
+    /**
+     * Novate execute get request
+     *
+     * @param url  path or url
+     * @param maps parameters  maps
+     * @param <T>  T return parsed data
+     * @return Subscription
+     */
+    public <T> Observable<T> rxGet(final String url, final Map<String, Object> maps) {
+        return (Observable<T>) apiManager.executeGet(url, maps);
+    }
+
+
+    /**
+     * Novate execute get request
+     *
+     * @param tag      request tag
+     * @param url      path or url
+     * @param maps     parameters  maps
+     * @param callBack ResponseCallback
+     * @param <T>      T return parsed data
+     * @return Subscription
+     */
+    public <T> void rxGet(final Object tag, final String url, @NonNull final Map<String, Object> maps, final ResponseCallback<T, ResponseBody> callBack) {
+
+        apiManager.executeGet(url, maps)
+                .compose(onDdoTransformer)
+                .compose(schedulersTransformer)
+                .compose(handleErrTransformer())
+                .subscribe(new RxSubscriber<T, ResponseBody>(tag, callBack).addContext(mContext));
+    }
+
+    /**
+     * Novate execute post request
+     *
+     * @param url      path or url
+     * @param maps     parameters  maps
+     * @param callBack ResponseCallback
+     * @param <T>      T return parsed data
+     * @return Subscription
+     */
+    public <T> void rxPost(final String url, @FieldMap(encoded = true) Map<String, Object> maps, ResponseCallback<T, ResponseBody> callBack) {
+        rxPost(url, url, maps, callBack);
+    }
+
+    /**
+     * Novate execute Post request
+     *
+     * @param tag      request tag
+     * @param url      path or url
+     * @param maps     parameters  maps
+     * @param callBack ResponseCallback
+     * @param <T>      T return parsed data
+     * @return Subscription
+     */
+    public <T> void rxPost(Object tag, final String url, @FieldMap(encoded = true) Map<String, Object> maps, ResponseCallback<T, ResponseBody> callBack) {
+        apiManager.executePost(url, maps)
+                .compose(schedulersTransformer)
+                .compose(handleErrTransformer())
+                .subscribe(new RxSubscriber<T, ResponseBody>(tag, callBack).addContext(mContext));
+    }
+
+
+    /**
+     * Novate execute Put request
+     *
+     * @param url      path or url
+     * @param maps     parameters  maps
+     * @param callBack ResponseCallback
+     * @param <T>      T return parsed data
+     * @return Subscription
+     */
+    public <T> void rxPut(final String url, final @FieldMap(encoded = true) Map<String, T> maps, ResponseCallback<T, ResponseBody> callBack) {
+        rxPut(url, url, maps, callBack);
+    }
+
+
+    /**
+     * Novate execute Put request
+     *
+     * @param tag      request tag
+     * @param url      path or url
+     * @param maps     parameters  maps
+     * @param callBack ResponseCallback
+     * @param <T>      T return parsed data
+     * @return Subscription
+     */
+    public <T> void rxPut(String tag, final String url, final @FieldMap(encoded = true) Map<String, T> maps, ResponseCallback<T, ResponseBody> callBack) {
+        apiManager.executePut(url, (Map<String, Object>) maps)
+                .compose(schedulersTransformer)
+                .compose(handleErrTransformer())
+                .subscribe(new RxSubscriber<T, ResponseBody>(tag, callBack).addContext(mContext));
+    }
+
+    /**
+     * Novate execute Delete request
+     *
+     * @param url      path or url
+     * @param maps     parameters  maps
+     * @param callBack ResponseCallback
+     * @param <T>      T return parsed data
+     * @return Subscription
+     */
+    public <T> void rxDelete(final String url, final Map<String, T> maps, ResponseCallback<T, ResponseBody> callBack) {
+        rxDelete(url, url, maps, callBack);
+    }
+
+
+    /**
+     * Novate execute Delete request
+     *
+     * @param tag      request tag
+     * @param url      path or url
+     * @param maps     parameters  maps
+     * @param callBack ResponseCallback
+     * @param <T>      T return parsed data
+     * @return Subscription
+     */
+    public <T> void rxDelete(String tag, final String url, final Map<String, T> maps, ResponseCallback<T, ResponseBody> callBack) {
+        apiManager.executeDelete(url, (Map<String, Object>) maps)
+                .compose(schedulersTransformer)
+                .compose(handleErrTransformer())
+                .subscribe(new RxSubscriber<T, ResponseBody>(tag, callBack).addContext(mContext));
+    }
+
+
+    /**
+     * Novate rxUpload by post With Part
+     * <p>
+     * 默认上传图片，
+     *
+     * @param url  url
+     * @param file file
+     * @param <T>
+     * @return Rxjava Subscription
+     */
+    public <T> void rxUploadWithPart(String tag, String url, File file, ResponseCallback<T, ResponseBody> callBack) {
+
+        rxUploadWithPart(tag, url, ContentType.IMAGE, file, callBack);
+    }
+
+    /**
+     * Novate rxUpload by post With Part
+     * <p>
+     * 默认上传图片，
+     *
+     * @param url  url
+     * @param file file
+     * @param <T>
+     * @return Rxjava Subscription
+     */
+    public <T> void rxUploadWithPart(String url, File file, ResponseCallback<T, ResponseBody> callBack) {
+
+        rxUploadWithPart(url, url, ContentType.IMAGE, file, callBack);
+    }
+
+
+    /**
+     * @param tag      request tag
+     * @param url      request url
+     * @param type     request ContentType See {@link ContentType}
+     * @param file     file
+     * @param callBack
+     * @param <T>      T
+     * @return Rxjava Subscription
+     */
+    public <T> void rxUploadWithPart(Object tag, String url, ContentType type, File file, ResponseCallback<T, ResponseBody> callBack) {
+        if (!file.exists()) {
+            throw new Resources.NotFoundException(file.getPath() + "file 路径无法找到");
+        }
+        if (callBack == null) {
+            callBack = ResponseCallback.CALLBACK_DEFAULT;
+        }
+        NovateRequestBody requestBody = Utils.createRequestBody(file, type, callBack);
+        MultipartBody.Part body =
+                MultipartBody.Part.createFormData("image", file.getName(), requestBody);
+
+        rxUploadWithPart(tag, url, body, callBack);
+    }
+
+
+    /**
+     * Novate rxUpload by post With Part
+     *
+     * @param url         path or url
+     * @param requestBody requestBody
+     * @param callBack    ResponseCallback
+     * @param <T>         T return parsed data
+     * @return Subscription
+     */
+    public <T> void rxUploadWithPart(String url, MultipartBody.Part requestBody, ResponseCallback<T, ResponseBody> callBack) {
+        rxUploadWithPart(url, url, requestBody, callBack);
+    }
+
+    /**
+     * Novate rxUpload by post With Part
+     *
+     * @param tag         request tag
+     * @param url         path or url
+     * @param requestBody requestBody
+     * @param callBack    ResponseCallback
+     * @param <T>         T return parsed data
+     * @return Subscription
+     */
+    public <T> void rxUploadWithPart(Object tag, String url, MultipartBody.Part requestBody, ResponseCallback<T, ResponseBody> callBack) {
+        apiManager.uploadFlieWithPart(url, requestBody)
+                .compose(schedulersTransformer)
+                .compose(handleErrTransformer())
+                .subscribe(new RxSubscriber<T, ResponseBody>(tag, callBack).addContext(mContext));
+    }
+
+    /**
+     * Novate rxUpload by post
+     *
+     * @param url         path or url
+     * @param description description
+     * @param requestBody requestBody
+     * @param callBack    ResponseCallback
+     * @param <T>         T return parsed data
+     * @return Subscription
+     */
+    public <T> void rxUpload(String url, RequestBody description, MultipartBody.Part requestBody, ResponseCallback<T, ResponseBody> callBack) {
+        rxUpload(url, url, description, requestBody, callBack);
+    }
+
+    /**
+     * Novate rxUpload by post
+     *
+     * @param tag         request tag
+     * @param url         path or url
+     * @param description description
+     * @param requestBody MultipartBody.Part
+     * @param callBack    ResponseCallback
+     * @param <T>         T return parsed data
+     * @return Rxjava Subscription
+     */
+    public <T> void rxUpload(Object tag, String url, RequestBody description, MultipartBody.Part requestBody, ResponseCallback<T, ResponseBody> callBack) {
+        apiManager.uploadFlie(url, description, requestBody)
+                .compose(schedulersTransformer)
+                .compose(handleErrTransformer())
+                .subscribe(new RxSubscriber<T, ResponseBody>(tag, callBack).addContext(mContext));
+    }
+
+
+    /**
+     * Novate rxUpload by post With Body
+     * <p>
+     * 默认上传图片，更多UploadWithBody(Object tag, String url, ContentType type, File file, ResponseCallback<T, ResponseBody> callBack)
+     *
+     * @param url  url
+     * @param file file
+     * @param <T>
+     * @return Rxjava Subscription
+     */
+    public <T> void rxUploadWithBody(String url, File file, ResponseCallback<T, ResponseBody> callBack) {
+
+        rxUploadWithBody(url, url, ContentType.IMAGE, file, callBack);
+    }
+
+    /**
+     * Novate rxUpload by post With Body
+     * <p>
+     * <p>
+     * 默认上传图片，更多UploadWithBody(Object tag, String url, ContentType type, File file, ResponseCallback<T, ResponseBody> callBack)
+     *
+     * @param tag  tag
+     * @param url  url
+     * @param file file
+     * @param <T>
+     * @return Rxjava Subscription
+     */
+    public <T> void rxUploadWithBody(Object tag, String url, File file, ResponseCallback<T, ResponseBody> callBack) {
+
+        rxUploadWithBody(tag, url, ContentType.IMAGE, file, callBack);
+    }
+
+
+    /**
+     * @param tag
+     * @param url
+     * @param type     request ContentType See {@link ContentType}
+     * @param file
+     * @param callBack ResponseCallback
+     * @param <T>      T
+     * @return RxJava 1.X Subscription
+     */
+    public <T> void rxUploadWithBody(Object tag, String url, ContentType type, File file, ResponseCallback<T, ResponseBody> callBack) {
+        if (!file.exists()) {
+            throw new Resources.NotFoundException(file.getPath() + "file 路径无法找到");
+        }
+        //NovateRequestBody  requestFile = Utils.createRequestBody(file, type, callBack);
+        if (callBack == null) {
+            callBack = ResponseCallback.CALLBACK_DEFAULT;
+        }
+        callBack.setTag(tag);
+        rxUploadWithBody(tag, url, Utils.createRequestBody(file, type, callBack), callBack);
+    }
+
+
+    /**
+     * Novate rxUpload by post With Body
+     *
+     * @param url         url
+     * @param requestBody requestBody
+     * @param callBack    back
+     * @param <T>
+     * @return Rxjava Subscription
+     */
+    public <T> void rxUploadWithBody(String url, NovateRequestBody requestBody, ResponseCallback<T, ResponseBody> callBack) {
+        rxUploadWithBody(url, url, requestBody, callBack);
+    }
+
+    /**
+     * Novate rxUpload by post With Body
+     *
+     * @param tag         tag
+     * @param url         url
+     * @param requestBody requestBody
+     * @param callBack    back
+     * @param <T>
+     * @return Rxjava Subscription
+     */
+    public <T> void rxUploadWithBody(Object tag, String url, RequestBody requestBody, ResponseCallback<T, ResponseBody> callBack) {
+        apiManager.postRequestBody(url, requestBody)
+                .compose(schedulersTransformer)
+                .compose(handleErrTransformer())
+                .subscribe(new RxSubscriber<T, ResponseBody>(tag, callBack).addContext(mContext));
+    }
+
+    /**
+     * Novate rxUpload by post Body Maps
+     *
+     * @param url      url
+     * @param maps     File files
+     * @param callBack back
+     * @param <T>
+     * @return Rxjava Subscription
+     */
+    public <T> void rxUploadWithPartMapByFile(String url, Map<String, File> maps, ResponseCallback<T, ResponseBody> callBack) {
+        rxUploadWithPartMapByFile(url, url, ContentType.IMAGE, maps, callBack);
+    }
+
+
+    /**
+     * Novate rxUpload by post Body Maps
+     *
+     * @param url      url
+     * @param maps     RequestBody files
+     * @param callBack back
+     * @param <T>
+     * @return Rxjava Subscription
+     */
+    public <T> void rxUploadWithBodyMap(String url, Map<String, RequestBody> maps, ResponseCallback<T, ResponseBody> callBack) {
+        rxUploadWithBodyMap(url, url, maps, callBack);
+    }
+
+
+    /**
+     * Novate rxUpload by post With PartMaps
+     *
+     * @param tag      tag
+     * @param url      url
+     * @param maps     File files
+     * @param callBack ResponseCallback
+     * @param <T>
+     * @return Rxjava 1.x Subscription
+     */
+    public <T> void rxUploadWithPartMapByFile(Object tag, String url, ContentType type, Map<String, File> maps, ResponseCallback<T, ResponseBody> callBack) {
+
+        if (callBack == null) {
+            callBack = ResponseCallback.CALLBACK_DEFAULT;
+        }
+        apiManager.uploadFlieWithPartMap(url, Utils.createParts("image", maps, type, callBack))
+                .compose(schedulersTransformer)
+                .compose(handleErrTransformer())
+                .subscribe(new RxSubscriber<T, ResponseBody>(tag, callBack).addContext(mContext));
+    }
+
+    /**
+     * Novate rxUpload by post PartBody List
+     *
+     * @param url      url
+     * @param list     File files
+     * @param callBack back
+     * @param <T>
+     * @return Rxjava Subscription
+     */
+    public <T> void rxUploadWithPartListByFile(String url, List<File> list, ResponseCallback<T, ResponseBody> callBack) {
+        rxUploadWithPartListByFile(url, url, ContentType.IMAGE, list, callBack);
+    }
+
+
+    /**
+     * Novate rxUpload by post PartBody List
+     *
+     * @param url      url
+     * @param list     RequestBody files
+     * @param callBack back
+     * @param <T>
+     * @return Rxjava Subscription
+     */
+    public <T> void rxUploadWithPartListByFile(Object tag, String url, List<File> list, ResponseCallback<T, ResponseBody> callBack) {
+        rxUploadWithPartListByFile(tag, url, ContentType.IMAGE, list, callBack);
+    }
+
+    /**
+     * Novate Novate rxUpload by post PartBody List
+     *
+     * @param tag      tag
+     * @param url      url
+     * @param list     File files
+     * @param callBack ResponseCallback
+     * @param <T>
+     * @return Rxjava 1.x Subscription
+     */
+    public <T> void rxUploadWithPartListByFile(Object tag, String url, ContentType type, List<File> list, ResponseCallback<T, ResponseBody> callBack) {
+
+        if (callBack == null) {
+            callBack = ResponseCallback.CALLBACK_DEFAULT;
+        }
+        apiManager.uploadFlieWithPartList(url, Utils.createPartLists("image", list, type, callBack))
+                .compose(schedulersTransformer)
+                .compose(handleErrTransformer())
+                .subscribe(new RxSubscriber<T, ResponseBody>(tag, callBack).addContext(mContext));
+    }
+
+    /**
+     * Novate rxUpload by post Body Maps
+     *
+     * @param url      url
+     * @param maps     RequestBody files
+     * @param callBack ResponseCallback
+     * @param <T>
+     * @return Rxjava Subscription
+     */
+    public <T> void rxUploadWithBodyMapByFile(String url, Map<String, File> maps, ResponseCallback<T, ResponseBody> callBack) {
+        rxUploadWithBodyMapByFile(url, url, ContentType.IMAGE, maps, callBack);
+    }
+
+    /**
+     * Novate rxUploadWithBodyMapByFile
+     *
+     * @param tag      tag
+     * @param url      url
+     * @param maps     maps
+     * @param callBack ResponseCallback
+     * @param <T>
+     * @return Rxjava Subscription
+     */
+    public <T> void rxUploadWithBodyMapByFile(Object tag, String url, Map<String, File> maps, ResponseCallback<T, ResponseBody> callBack) {
+        rxUploadWithBodyMapByFile(tag, url, ContentType.IMAGE, maps, callBack);
+    }
+
+    /**
+     * Novate rxUpload by post With BodyMaps
+     *
+     * @param tag      tag
+     * @param url      url
+     * @param maps     File files
+     * @param callBack ResponseCallback
+     * @param <T>
+     * @return Rxjava 1.x Subscription
+     */
+    public <T> void rxUploadWithBodyMapByFile(Object tag, String url, ContentType type, Map<String, File> maps, ResponseCallback<T, ResponseBody> callBack) {
+        Map<String, RequestBody> bodys = new HashMap<>();
+
+        if (callBack == null) {
+            callBack = ResponseCallback.CALLBACK_DEFAULT;
+        }
+
+        if (maps != null && maps.size() > 0) {
+            Iterator<String> keys = maps.keySet().iterator();
+            NovateRequestBody requestBody = null;
+            while (keys.hasNext()) {
+                String i = keys.next();
+                File file = maps.get(i);
+                if (FileUtil.exists(file)) {
+                    throw new Resources.NotFoundException(file.getPath() + "file 路径无法找到");
+                } else {
+                    requestBody = Utils.createRequestBody(file, type, callBack);
+                    bodys.put(i, requestBody);
+                }
+            }
+        }
+
+        apiManager.uploadFiles(url, bodys)
+                .compose(schedulersTransformer)
+                .compose(handleErrTransformer())
+                .subscribe(new RxSubscriber<T, ResponseBody>(tag, callBack).addContext(mContext));
+    }
+
+
+    /**
+     * Novate rxUpload by post With BodyMaps
+     *
+     * @param tag      tag
+     * @param url      url
+     * @param maps     RequestBody files
+     * @param callBack ResponseCallback
+     * @param <T>
+     * @return Rxjava 1.x Subscription
+     */
+    public <T> void rxUploadWithBodyMap(Object tag, String url, Map<String, RequestBody> maps, ResponseCallback<T, ResponseBody> callBack) {
+        apiManager.uploadFiles(url, maps)
+                .compose(schedulersTransformer)
+                .compose(handleErrTransformer())
+                .subscribe(new RxSubscriber<T, ResponseBody>(tag, callBack).addContext(mContext));
+    }
+
+    /**
+     * Novate rxUpload by post With BodyMaps
+     *
+     * @param url      url
+     * @param files    MultipartBody.Part files
+     * @param callBack
+     * @param <T>
+     * @return Rxjava 1.x Subscription
+     */
+    public <T> void rxUploadWithPartMap(String url, Map<String, MultipartBody.Part> files, ResponseCallback<T, ResponseBody> callBack) {
+        rxUploadWithPartMap(url, url, files, callBack);
+    }
+
+    /**
+     * Novate rxUpload by post With BodyMaps
+     *
+     * @param tag      tag
+     * @param url      url
+     * @param files    MultipartBody.Part files
+     * @param callBack ResponseCallback
+     * @param <T>
+     * @return Rxjava 1.x Subscription
+     */
+    public <T> void rxUploadWithPartMap(Object tag, String url, Map<String, MultipartBody.Part> files, ResponseCallback<T, ResponseBody> callBack) {
+        apiManager.uploadFlieWithPartMap(url, files)
+                .compose(schedulersTransformer)
+                .compose(handleErrTransformer())
+                .subscribe(new RxSubscriber<T, ResponseBody>(tag, callBack).addContext(mContext));
+    }
+
+    /**
+     * Rx Download file
+     *
+     * @param callBack
+     */
+    public <T> void rxDownload(String url, final ResponseCallback callBack) {
+        rxDownload(url, url, callBack);
+    }
+
+    /**
+     * Rx Download file
+     *
+     * @param tag      request Tag
+     * @param callBack
+     */
+    public <T> void rxDownload(Object tag, String url, final ResponseCallback callBack) {
+        if (downMaps.get(tag) == null) {
+            downObservable = apiManager.downloadFile(url);
+        } else {
+            downObservable = downMaps.get(tag);
+        }
+        downMaps.put(tag, downObservable);
+        downObservable.compose(schedulersTransformerDown)
+                .compose(handleErrTransformer())
+                .subscribe(new RxSubscriber<T, ResponseBody>(tag, callBack));
+    }
+
+    public <T> void rxDownload(Object tag, String url, Map<String, Object> maps, final ResponseCallback callBack) {
+        if (downMaps.get(tag) == null) {
+            downObservable = apiManager.downloadFile(url, maps);
+        } else {
+            downObservable = downMaps.get(tag);
+        }
+        downMaps.put(tag, downObservable);
+        downObservable.compose(schedulersTransformerDown)
+                .compose(handleErrTransformer())
+                .subscribe(new RxSubscriber<T, ResponseBody>(tag, callBack));
+    }
+
+    /**
+     * Novate Post by Form
+     *
+     * @param url        path or url
+     * @param parameters parameters  maps
+     * @param callBack   ResponseCallback
+     * @param <T>        T return parsed data
+     * @return Rxjav 1.x Subscription
+     */
+    public <T> void rxForm(String url, @FieldMap(encoded = true) Map<String, Object> parameters, ResponseCallback<T, ResponseBody> callBack) {
+        rxForm(url, url, parameters, callBack);
+    }
+
+    /**
+     * Novate Post by Form
+     *
+     * @param tag        request tag
+     * @param url        path or url
+     * @param parameters parameters  maps
+     * @param callBack   ResponseCallback
+     * @param <T>        T return parsed data
+     * @return Subscription
+     */
+    public <T> void rxForm(Object tag, String url, @FieldMap(encoded = true) Map<String, Object> parameters, ResponseCallback<T, ResponseBody> callBack) {
+        apiManager.postForm(url, parameters)
+                .compose(schedulersTransformer)
+                .compose(handleErrTransformer())
+                .subscribe(new RxSubscriber<T, ResponseBody>(tag, callBack));
+    }
+
+    /**
+     * Novate  Post by Body
+     *
+     * @param url      path or url
+     * @param bean     Object bean
+     * @param callBack ResponseCallback
+     * @param <T>      T return parsed data
+     * @return Subscription
+     */
+    public <T> void rxBody(String url, Object bean, ResponseCallback<T, ResponseBody> callBack) {
+        rxBody(url, url, bean, callBack);
+    }
+
+    /**
+     * Novate  Post by Body
+     *
+     * @param tag      request tag
+     * @param url      path or url
+     * @param bean     Object bean
+     * @param callBack ResponseCallback
+     * @param <T>      T return parsed data
+     * @return Subscription
+     */
+    public <T> void rxBody(Object tag, String url, Object bean, ResponseCallback<T, ResponseBody> callBack) {
+        apiManager.executePostBody(url, bean)
+                .compose(schedulersTransformer)
+                .compose(handleErrTransformer())
+                .subscribe(new RxSubscriber<T, ResponseBody>(tag, callBack).addContext(mContext));
+    }
+
+
+    /**
+     * Novate  Post by Json
+     *
+     * @param url        path or url
+     * @param jsonString jsonString
+     * @param callBack   ResponseCallback
+     * @param <T>        T return parsed data
+     * @return Subscription
+     */
+    public <T> void rxJson(String url, String jsonString, ResponseCallback<T, ResponseBody> callBack) {
+        rxJson(url, url, jsonString, callBack);
+    }
+
+
+    /**
+     * Novate  Post by Json
+     *
+     * @param tag      request tag
+     * @param url      path or url
+     * @param callBack ResponseCallback
+     * @param <T>      T return parsed data
+     * @return Subscription
+     */
+    public <T> void rxJson(Object tag, String url, String jsonString, ResponseCallback<T, ResponseBody> callBack) {
+        apiManager.postRequestBody(url, Utils.createJson(jsonString))
+                .compose(schedulersTransformer)
+                .compose(handleErrTransformer())
+                .subscribe(new RxSubscriber<T, ResponseBody>(tag, callBack).addContext(mContext));
+    }
+
+
+    /**
+     * RXJAVA schedulersTransformer
+     * AndroidSchedulers.mainThread()
+     */
+    private final ObservableTransformer onDdoTransformer = new ObservableTransformer() {
+        @Override
+        public ObservableSource apply(Observable upstream) {
+            return upstream.doOnSubscribe(new Consumer<Disposable>() {
+                @Override
+                public void accept(Disposable disposable) throws Exception {
+
+                }
+            });
+        }
+    };
+
+    /**
+     * RXJAVA schedulersTransformer
+     * AndroidSchedulers.mainThread()
+     */
+    private final ObservableTransformer schedulersTransformer = new ObservableTransformer() {
+        @Override
+        public ObservableSource apply(Observable upstream) {
+            return upstream.subscribeOn(Schedulers.io())
+                    .unsubscribeOn(Schedulers.io())
+                    .observeOn(AndroidSchedulers.mainThread());
+        }
+    };
+
+
+    /**
+     * RXJAVA schedulersTransformer
+     * <p>
+     * Schedulers.io()
+     */
+    private final ObservableTransformer schedulersTransformerDown = new ObservableTransformer() {
+        @Override
+        public ObservableSource apply(Observable upstream) {
+            return upstream.subscribeOn(Schedulers.io())
+                    .subscribeOn(Schedulers.newThread())
+                    .unsubscribeOn(Schedulers.io())
+                    .observeOn(Schedulers.io());
+        }
+    };
+
+
+    /**
+     * handleException Transformer
+     *
+     * @return Transformer
+     */
+    public ObservableTransformer handleErrTransformer() {
+        if (exceptTransformer != null)
+            return exceptTransformer;
+        return new ObservableTransformer() {
+            @Override
+            public ObservableSource apply(Observable upstream) {
+                return upstream.onErrorResumeNext(new Function<Throwable, ObservableSource>() {
+                    @Override
+                    public ObservableSource apply(Throwable throwable) throws Exception {
+                        return Observable.error(NovateException.handleException(new Exception(throwable)));
+                    }
+                });
+            }
+        };
+    }
+
+
+    /**
+     * HttpResponseFunc
+     *
+     * @param <T> Observable
+     */
+    private static class HttpResponseFunc<T> implements Function<MThrowable, Observable<T>> {
+
+        @Override
+        public Observable<T> apply(MThrowable input) {
+            return Observable.error(NovateException.handleException(input));
+        }
+    }
+
+    /**
+     * T
+     *
+     * @param <T> response
+     */
+    private class HandleFuc<T> implements Function<NovateResponse<T>, T> {
+
+        @Override
+        public T apply(NovateResponse<T> response) throws Exception {
+            if (response == null || (response.getData() == null && response.getResult() == null)) {
+                throw new JsonParseException("后端数据不对");
+            }
+            /*if (!response.isOk()) {
+                throw new RuntimeException(response.getCode() + "" + response.getMsg() != null ? response.getMsg() : "");
+            }
+*/
+            return response.getData();
+        }
+    }
+
+    /**
+     * Retroift get
+     *
+     * @param url
+     * @param maps
+     * @param subscriber
+     * @param <T>
+     * @return no parse data
+     */
+    public <T> void get(String url, Map<String, Object> maps, BaseSubscriber<ResponseBody> subscriber) {
+        apiManager.executeGet(url, maps)
+                .compose(schedulersTransformer)
+                .compose(handleErrTransformer())
+                .subscribe(subscriber);
+    }
+
+    /**
+     * /**
+     * Novate executePost
+     *
+     * @return no parse data
+     * <p>
+     * you must to be parse ResponseBody
+     * <p>
+     * <p/>
+     * For example,
+     * <pre>{@code
+     * Novate novate = new Novate.Builder()
+     *     .baseUrl("http://api.example.com")
+     *     .addConverterFactory(GsonConverterFactory.create())
+     *     .build();
+     *
+     * novate.post("url", parameters, new BaseSubscriber<ResponseBody>(context) {
+     *    @Override
+     *   public void onError(Throwable e) {
+     *
+     *   }
+     *
+     *  @Override
+     *  public void onNext(ResponseBody responseBody) {
+     *
+     *   // todo you need to parse responseBody
+     *
+     *  }
+     *  });
+     * <p/>
+     *
+     * }</pre>
+     */
+    public <T> void post(String url, @FieldMap(encoded = true) Map<String, Object> parameters, BaseSubscriber<ResponseBody> subscriber) {
+        apiManager.executePost(url, (Map<String, Object>) parameters)
+                .compose(schedulersTransformer)
+                .compose(handleErrTransformer())
+                .subscribe(subscriber);
+    }
+
+
+    /**
+     * Novate Post by Form
+     *
+     * @param url
+     * @param subscriber
+     */
+    public <T> void form(String url, @FieldMap(encoded = true) Map<String, Object> fields, BaseSubscriber<ResponseBody> subscriber) {
+        apiManager.postForm(url, fields)
+                .compose(schedulersTransformer)
+                .compose(handleErrTransformer())
+                .subscribe(subscriber);
+    }
+
+
+    /**
+     * /**
+     * http Post by Body
+     * you  need to parse ResponseBody
+     *
+     * @param url
+     * @param subscriber
+     */
+    public void body(String url, Object body, BaseSubscriber<ResponseBody> subscriber) {
+        apiManager.executePostBody(url, body)
+                .compose(schedulersTransformer)
+                .compose(handleErrTransformer())
+                .subscribe(subscriber);
+    }
+
+
+    /**
+     * http Post by json
+     * you  need to parse ResponseBody
+     *
+     * @param url
+     * @param jsonStr    Json String
+     * @param subscriber
+     */
+    public <T> void json(String url, String jsonStr, BaseSubscriber<ResponseBody> subscriber) {
+        apiManager.postRequestBody(url, Utils.createJson(jsonStr))
+                .compose(schedulersTransformer)
+                .compose(handleErrTransformer())
+                .subscribe(subscriber);
+    }
+
+
+    /**
+     * Novate delete
+     *
+     * @param url
+     * @param maps
+     * @param subscriber
+     * @param <T>
+     * @return no parse data
+     */
+    public <T> void delete(String url, Map<String, T> maps, BaseSubscriber<ResponseBody> subscriber) {
+        apiManager.executeDelete(url, (Map<String, Object>) maps)
+                .compose(schedulersTransformer)
+                .compose(handleErrTransformer())
+                .subscribe(subscriber);
+    }
+
+
+    /**
+     * Novate put
+     *
+     * @param url
+     * @param parameters
+     * @param subscriber
+     * @param <T>
+     * @return no parse data
+     */
+    public <T> void put(String url, final @FieldMap(encoded = true) Map<String, T> parameters, BaseSubscriber<ResponseBody> subscriber) {
+        apiManager.executePut(url, (Map<String, Object>) parameters)
+                .compose(schedulersTransformer)
+                .compose(handleErrTransformer())
+                .subscribe(subscriber);
+    }
+
+    /**
+     * Novate Test
+     *
+     * @param url        url
+     * @param maps       maps
+     * @param subscriber subscriber
+     * @param <T>        T
+     * @return
+     */
+    public <T> void test(String url, Map<String, T> maps, BaseSubscriber<ResponseBody> subscriber) {
+        apiManager.getTest(url, (Map<String, Object>) maps)
+                .compose(schedulersTransformer)
+                .compose(handleErrTransformer())
+                .retryWhen(new RetryWithDelay(3, 3000))
+                .subscribe(subscriber);
+    }
+
+    /**
+     * Novate upload
+     *
+     * @param url
+     * @param requestBody requestBody
+     * @param subscriber  subscriber
+     * @return
+     */
+    public void upload(String url, RequestBody requestBody, BaseSubscriber<ResponseBody> subscriber) {
+        apiManager.postRequestBody(url, requestBody)
+                .compose(schedulersTransformer)
+                .compose(handleErrTransformer())
+                .subscribe(subscriber);
+    }
+
+    /**
+     * uploadImage
+     *
+     * @param url        url
+     * @param file       file
+     * @param subscriber
+     * @return
+     */
+    public void uploadImage(String url, File file, BaseSubscriber<ResponseBody> subscriber) {
+        apiManager.upLoadImage(url, Utils.createImage(file))
+                .compose(schedulersTransformer)
+                .compose(handleErrTransformer())
+                .subscribe(subscriber);
+    }
+
+    /**
+     * Novate upload Flie
+     *
+     * @param url
+     * @param file       file
+     * @param subscriber subscriber
+     * @return
+     */
+    public void uploadFlie(String url, RequestBody file, BaseSubscriber<ResponseBody> subscriber) {
+        apiManager.postRequestBody(url, file)
+                .compose(schedulersTransformer)
+                .compose(handleErrTransformer())
+                .subscribe(subscriber);
+    }
+
+    /**
+     * Novate upload Flie
+     *
+     * @param url
+     * @param file       file
+     * @param subscriber subscriber
+     * @return
+     */
+    public void uploadFlie(String url, RequestBody description, MultipartBody.Part file, BaseSubscriber<ResponseBody> subscriber) {
+        apiManager.uploadFlie(url, description, file)
+                .compose(schedulersTransformer)
+                .compose(handleErrTransformer())
+                .subscribe(subscriber);
+    }
+
+    /**
+     * Novate upload Flies
+     *
+     * @param url
+     * @param subscriber subscriber
+     * @return
+     */
+    public void uploadFlies(String url, Map<String, RequestBody> files, BaseSubscriber<ResponseBody> subscriber) {
+        apiManager.uploadFiles(url, files)
+                .compose(schedulersTransformer)
+                .compose(handleErrTransformer())
+                .subscribe(subscriber);
+    }
+
+
+    /**
+     * Novate upload Flies WithPartMap
+     *
+     * @param url
+     * @param partMap
+     * @param file
+     * @param subscriber
+     * @return
+     */
+    public void uploadFileWithPartMap(String url, Map<String, RequestBody> partMap,
+                                      @Part("file") MultipartBody.Part file, BaseSubscriber<ResponseBody> subscriber) {
+        apiManager.uploadFileWithPartMap(url, partMap, file)
+                .compose(schedulersTransformer)
+                .compose(handleErrTransformer())
+                .subscribe(subscriber);
+    }
+
+
+    /**
+     * Novate download
+     *
+     * @param url
+     * @param callBack
+     */
+    public void download(String url, DownLoadCallBack callBack) {
+
+        download(url, FileUtil.getFileNameWithURL(url), callBack);
+    }
+
+    /**
+     * @param url
+     * @param name
+     * @param callBack
+     */
+    public void download(String url, String name, DownLoadCallBack callBack) {
+        download(FileUtil.generateFileKey(url, name), url, null, name, callBack);
+    }
+
+    /**
+     * downloadMin
+     *
+     * @param url
+     * @param callBack
+     */
+    public void downloadMin(String url, DownLoadCallBack callBack) {
+        downloadMin(FileUtil.generateFileKey(url, FileUtil.getFileNameWithURL(url)), url, callBack);
+    }
+
+    /**
+     * downloadMin
+     *
+     * @param key      key
+     * @param url      url
+     * @param callBack CallBack
+     */
+    public void downloadMin(String key, String url, DownLoadCallBack callBack) {
+        downloadMin(key, url, FileUtil.getFileNameWithURL(url), callBack);
+    }
+
+    /**
+     * downloadMin
+     *
+     * @param key      key
+     * @param url      down url
+     * @param name     name
+     * @param callBack callBack
+     */
+    public void downloadMin(String key, String url, String name, DownLoadCallBack callBack) {
+        downloadMin(key, url, null, name, callBack);
+    }
+
+    /**
+     * download small file
+     *
+     * @param key
+     * @param url
+     * @param savePath
+     * @param name
+     * @param callBack
+     */
+    public void downloadMin(String key, String url, String savePath, String name, DownLoadCallBack callBack) {
+
+        if (TextUtils.isEmpty(key)) {
+            key = FileUtil.generateFileKey(url, FileUtil.getFileNameWithURL(url));
+        }
+
+        if (downMaps.get(key) == null) {
+            downObservable = apiManager.downloadSmallFile(url);
+        } else {
+            downObservable = downMaps.get(key);
+        }
+        downMaps.put(key, downObservable);
+        executeDownload(key, url, savePath, name, callBack);
+    }
+
+
+    /**
+     * @param key
+     * @param url
+     * @param savePath
+     * @param name
+     * @param callBack
+     */
+    public void download(String key, String url, String savePath, String name, DownLoadCallBack callBack) {
+        if (TextUtils.isEmpty(key)) {
+            key = FileUtil.generateFileKey(url, FileUtil.getFileNameWithURL(url));
+        }
+        executeDownload(key, url, savePath, name, callBack);
+    }
+
+    /**
+     * executeDownload
+     *
+     * @param key
+     * @param savePath
+     * @param name
+     * @param callBack
+     */
+    private void executeDownload(String key, String url, String savePath, String name, final DownLoadCallBack callBack) {
+        /*if (NovateDownLoadManager.isDownLoading) {
+            downMaps.get(key).unsubscribeOn(Schedulers.io());
+            NovateDownLoadManager.isDownLoading = false;
+            NovateDownLoadManager.isCancel = true;
+            return;
+        }*/
+        //NovateDownLoadManager.isDownLoading = true;
+
+        if (downMaps.get(key) == null) {
+            downObservable = apiManager.downloadFile(url);
+        } else {
+            downObservable = downMaps.get(key);
+        }
+        downMaps.put(key, downObservable);
+
+      /*  okhttpBuilder.networkInterceptors().add(new Interceptor() {
+            @Override
+            public okhttp3.Response intercept(Chain chain) throws IOException {
+                okhttp3.Response originalResponse = chain.proceed(chain.request());
+                return originalResponse.newBuilder().body(
+                        new NovateResponseBody(originalResponse.body(), callBack))
+                        .build();
+
+            }
+        });*/
+
+        downObservable.compose(schedulersTransformerDown)
+                .compose(handleErrTransformer())
+                .subscribe(new DownSubscriber<ResponseBody>(key, savePath, name, callBack, mContext));
+
+    }
+
+    public Builder newBuilder() {
+        return new Builder(this);
+    }
+
+    /**
+     * Mandatory Builder for the Builder
+     */
+    public static final class Builder {
+
+        private int connectTimeout = DEFAULT_TIMEOUT;
+        private int writeTimeout = DEFAULT_TIMEOUT;
+        private int readTimeout = DEFAULT_TIMEOUT;
+        private int default_maxidle_connections = DEFAULT_MAXIDLE_CONNECTIONS;
+        private long default_keep_aliveduration = DEFAULT_KEEP_ALIVEDURATION;
+        private long cacheMaxSize = DEFAULT_CACHEMAXSIZE;
+        private int cacheTimeout = DEFAULT_MAX_STALE;
+        private okhttp3.Call.Factory callFactory;
+        private String baseUrl;
+        private Boolean isLog = false;
+        private Object tag;
+        private Boolean isCookie = false;
+        private Boolean isCache = true;
+        private Boolean isSkip = false;
+        private List<InputStream> certificateList;
+        private HostnameVerifier hostnameVerifier;
+        private CertificatePinner certificatePinner;
+        private List<Converter.Factory> converterFactories = new ArrayList<>();
+        private List<CallAdapter.Factory> adapterFactories = new ArrayList<>();
+        private Executor callbackExecutor;
+        private boolean validateEagerly;
+        private Context context;
+        private NovateCookieManager cookieManager;
+        private Cache cache = null;
+        private Proxy proxy;
+        private File httpCacheDirectory;
+        private SSLSocketFactory sslSocketFactory;
+        private ConnectionPool connectionPool;
+        private Converter.Factory converterFactory;
+        private CallAdapter.Factory callAdapterFactory;
+        private Interceptor REWRITE_CACHE_CONTROL_INTERCEPTOR;
+        private Interceptor REWRITE_CACHE_CONTROL_INTERCEPTOR_OFFLINE;
+
+        public Builder(Context context) {
+            // Add the base url first. This prevents overriding its behavior but also
+            // ensures correct behavior when using novate that consume all types.
+            okhttpBuilder = new OkHttpClient.Builder();
+            retrofitBuilder = new Retrofit.Builder();
+            if (context instanceof Activity) {
+                this.context = ((Activity) context).getApplicationContext();
+            } else {
+                this.context = context;
+            }
+        }
+
+        public Builder(Novate novate) {
+            this.callFactory = novate.callFactory;
+            this.baseUrl = novate.baseUrl;
+            this.converterFactories = novate.converterFactories;
+            this.adapterFactories = novate.adapterFactories;
+            this.callbackExecutor = novate.callbackExecutor;
+            this.validateEagerly = novate.validateEagerly;
+            okhttpBuilder.addInterceptor(novate.okhttpBuilder.interceptors().iterator().next());
+        }
+
+        /**
+         * The HTTP client used for requests. default OkHttpClient
+         * <p/>
+         * This is a convenience method for calling {@link #callFactory}.
+         * <p/>
+         * Note: This method <b>does not</b> make a defensive copy of {@code client}. Changes to its
+         * settings will affect subsequent requests. Pass in a {@linkplain OkHttpClient#clone() cloned}
+         * instance to prevent this if desired.
+         */
+        @NonNull
+        public Builder client(OkHttpClient client) {
+            retrofitBuilder.client(Utils.checkNotNull(client, "client == null"));
+            return this;
+        }
+
+        /**
+         * Add ApiManager for serialization and deserialization of objects.
+         *//*
+        public Builder addApiManager(final Class<ApiManager> service) {
+
+            apiManager = retrofit.create((Utils.checkNotNull(service, "apiManager == null")));
+            //return retrofit.create(service);
+            return this;
+        }*/
+
+        /**
+         * Specify a custom call factory for creating {@link } instances.
+         * <p/>
+         * Note: Calling {@link #client} automatically sets this value.
+         */
+        public Builder callFactory(okhttp3.Call.Factory factory) {
+            this.callFactory = Utils.checkNotNull(factory, "factory == null");
+            return this;
+        }
+
+        /**
+         * Sets the default connect timeout for new connections. A value of 0 means no timeout,
+         * otherwise values must be between 1 and {@link Integer#MAX_VALUE} when converted to
+         * milliseconds.
+         */
+        public Builder connectTimeout(int timeout) {
+            return connectTimeout(timeout, TimeUnit.SECONDS);
+        }
+
+        /**
+         * Sets the default connect timeout for new connections. A value of 0 means no timeout,
+         * otherwise values must be between 1 and {@link Integer#MAX_VALUE} when converted to
+         * milliseconds.
+         */
+        public Builder writeTimeout(int timeout) {
+            return writeTimeout(timeout, TimeUnit.SECONDS);
+        }
+
+
+        /**
+         * Sets the default read timeout for new connections. A value of 0 means no timeout, otherwise
+         * values must be between 1 and {@link Integer#MAX_VALUE} when converted to milliseconds.
+         */
+        public Builder readTimeout(int timeout) {
+            return readTimeout(timeout, TimeUnit.SECONDS);
+        }
+
+        /**
+         * Attaches {@code tag} to the request. It can be used later to cancel the request. If the tag
+         * is unspecified or null, the request is canceled by using the request itself as the tag.
+         */
+        public Builder tag(Object tag) {
+            this.tag = tag;
+            return this;
+        }
+
+        /**
+         * open default logcat
+         *
+         * @param isLog
+         * @return
+         */
+        public Builder addLog(boolean isLog) {
+            this.isLog = isLog;
+            return this;
+        }
+
+
+        /**
+         * open sync default Cookie
+         *
+         * @param isCookie
+         * @return
+         */
+        public Builder addCookie(boolean isCookie) {
+            this.isCookie = isCookie;
+            return this;
+        }
+
+
+        /**
+         * set Cache MaxSize
+         *
+         * @param size MaxSize unit kb
+         *             def  10 * 1024 * 1024
+         * @return
+         */
+        public Builder addCacheMaxSize(int size) {
+            this.cacheMaxSize = size;
+            return this;
+        }
+
+        /**
+         * open default Cache
+         *
+         * @param isCache
+         * @return
+         */
+        public Builder addCache(boolean isCache) {
+            this.isCache = isCache;
+            return this;
+        }
+
+        public Builder proxy(Proxy proxy) {
+            this.proxy = proxy;
+            okhttpBuilder.proxy(Utils.checkNotNull(proxy, "proxy == null"));
+            return this;
+        }
+
+        /**
+         * Sets the default write timeout for new connections. A value of 0 means no timeout,
+         * otherwise values must be between 1 and {@link TimeUnit #MAX_VALUE} when converted to
+         * milliseconds.
+         * TimeUnit {@link TimeUnit}
+         */
+        public Builder writeTimeout(int timeout, TimeUnit unit) {
+            this.writeTimeout = timeout;
+            if (timeout >= 0) {
+                okhttpBuilder.writeTimeout(timeout, unit);
+            }
+            return this;
+        }
+
+
+        /**
+         * Sets the default read timeout for new connections. A value of 0 means no timeout, otherwise
+         * values must be between 1 and {@link Integer#MAX_VALUE} when converted to milliseconds.
+         * TimeUnit {@link TimeUnit}
+         */
+        public Builder readTimeout(int timeout, TimeUnit unit) {
+            if (readTimeout > 0) {
+                this.readTimeout = timeout;
+                okhttpBuilder.readTimeout(readTimeout, unit);
+            }
+            return this;
+        }
+
+        /**
+         * Sets the connection pool used to recycle HTTP and HTTPS connections.
+         * <p>
+         * <p>If unset, a new connection pool will be used.
+         * <p>
+         * connectionPool =
+         * new ConnectionPool(DEFAULT_MAXIDLE_CONNECTIONS, DEFAULT_KEEP_ALIVEDURATION, TimeUnit.SECONDS);
+         * <p>
+         */
+        public Builder connectionPool(ConnectionPool connectionPool) {
+            if (connectionPool == null) {
+                throw new NullPointerException("connectionPool == null");
+            }
+            this.connectionPool = connectionPool;
+            return this;
+        }
+
+        /**
+         * Sets the default connect timeout for new connections. A value of 0 means no timeout,
+         * otherwise values must be between 1 and {@link TimeUnit #MAX_VALUE} when converted to
+         * milliseconds.
+         * TimeUnit {@link TimeUnit}
+         */
+        public Builder connectTimeout(int timeout, TimeUnit unit) {
+            this.readTimeout = Utils.checkDuration("timeout", timeout, unit);
+            if (timeout >= 0) {
+                this.readTimeout = timeout;
+                okhttpBuilder.connectTimeout(readTimeout, unit);
+            }
+            return this;
+        }
+
+
+        /**
+         * Set an API base URL which can change over time.
+         *
+         * @see (HttpUrl)
+         */
+        public Builder baseUrl(String baseUrl) {
+            this.baseUrl = Utils.checkNotNull(baseUrl, "baseUrl == null");
+            return this;
+        }
+
+        /**
+         * Add converter factory for serialization and deserialization of objects.
+         */
+        public Builder addConverterFactory(Converter.Factory factory) {
+            this.converterFactory = factory;
+            return this;
+        }
+
+        /**
+         * Add a call adapter factory for supporting service method return types other than {@link CallAdapter
+         * }.
+         */
+        public Builder addCallAdapterFactory(CallAdapter.Factory factory) {
+            this.callAdapterFactory = factory;
+            return this;
+        }
+
+        /**
+         * update Header for serialization and deserialization of objects.
+         */
+        public <T> Builder header(Map<String, T> headers) {
+            okhttpBuilder.addInterceptor(new BaseHeaderInterceptor(Utils.checkNotNull(headers, "header == null"), AbsRequestInterceptor.Type.UPDATE));
+            return this;
+        }
+
+
+        /**
+         * Add Header for serialization and deserialization of objects.
+         */
+        public <T> Builder addHeader(Map<String, T> headers) {
+            okhttpBuilder.addInterceptor(new BaseHeaderInterceptor(Utils.checkNotNull(headers, "header == null")));
+            return this;
+        }
+
+        /**
+         * update parameters for serialization and deserialization of objects.
+         */
+        public <T> Builder parameters(Map<String, T> parameters) {
+            okhttpBuilder.addInterceptor(new BaseParameters(Utils.checkNotNull(parameters, "parameters == null"), AbsRequestInterceptor.Type.UPDATE));
+            return this;
+        }
+
+
+        /**
+         * Add parameters for serialization and deserialization of objects.
+         */
+        public <T> Builder addParameters(Map<String, T> parameters) {
+            okhttpBuilder.addInterceptor(new BaseParameters(Utils.checkNotNull(parameters, "parameters == null")));
+            return this;
+        }
+
+        /**
+         * Returns a modifiable list of interceptors that observe a single network request and response.
+         * These interceptors must call {@link Interceptor.Chain#proceed} exactly once: it is an error
+         * for a network interceptor to short-circuit or repeat a network request.
+         */
+        public Builder addInterceptor(Interceptor interceptor) {
+            okhttpBuilder.addInterceptor(Utils.checkNotNull(interceptor, "interceptor == null"));
+            return this;
+        }
+
+        /**
+         * The executor on which {@link Call} methods are invoked when returning {@link Call} from
+         * your service method.
+         * <p/>
+         * Note: {@code executor} is not used for {@linkplain #addCallAdapterFactory custom method
+         * return types}.
+         */
+        public Builder callbackExecutor(Executor executor) {
+            this.callbackExecutor = Utils.checkNotNull(executor, "executor == null");
+            return this;
+        }
+
+        /**
+         * When calling {@link #create} on the resulting {@link Retrofit} instance, eagerly validate
+         * the configuration of all methods in the supplied interface.
+         */
+        public Builder validateEagerly(boolean validateEagerly) {
+            this.validateEagerly = validateEagerly;
+            return this;
+        }
+
+        /**
+         * Sets the handler that can accept cookies from incoming HTTP responses and provides cookies to
+         * outgoing HTTP requests.
+         * <p/>
+         * <p>If unset, {@linkplain NovateCookieManager#NO_COOKIES no cookies} will be accepted nor provided.
+         */
+        public Builder cookieManager(NovateCookieManager cookie) {
+            if (cookie == null) {
+                throw new NullPointerException("cookieManager == null");
+            }
+            this.cookieManager = cookie;
+            return this;
+        }
+
+        /**
+         * skipSSLSocketFactory
+         */
+        public Builder skipSSLSocketFactory(boolean isSkip) {
+            this.isSkip = isSkip;
+            return this;
+        }
+
+        /**
+         * addSSLSocketFactory
+         */
+        public Builder addSSLSocketFactory(SSLSocketFactory sslSocketFactory) {
+            if (sslSocketFactory == null) {
+                throw new NullPointerException("sslSocketFactory == null");
+            }
+            this.sslSocketFactory = sslSocketFactory;
+            return this;
+        }
+
+        /**
+         * HostnameVerifier
+         *
+         * @param hostnameVerifier
+         * @return Builder
+         */
+        public Builder addHostnameVerifier(HostnameVerifier hostnameVerifier) {
+            this.hostnameVerifier = hostnameVerifier;
+            return this;
+        }
+
+        /**
+         * addCertificatePinner
+         */
+        public Builder addCertificatePinner(CertificatePinner certificatePinner) {
+            this.certificatePinner = certificatePinner;
+            return this;
+        }
+
+
+        /**
+         * Sets the handler that can accept cookies from incoming HTTP responses and provides cookies to
+         * outgoing HTTP requests.
+         * <p/>
+         * <p>If unset, {@linkplain NovateCookieManager#NO_COOKIES no cookies} will be accepted nor provided.
+         */
+        public Builder addSSL(String[] hosts, int[] certificates) {
+            if (hosts == null) {
+                throw new NullPointerException("hosts == null");
+            }
+            if (certificates == null) {
+                throw new NullPointerException("ids == null");
+            }
+
+
+            addSSLSocketFactory(NovateHttpsFactroy.getSSLSocketFactory(context, certificates));
+            addHostnameVerifier(NovateHttpsFactroy.getHostnameVerifier(hosts));
+            return this;
+        }
+
+        public Builder addNetworkInterceptor(Interceptor interceptor) {
+            if (interceptor == null) {
+                throw new NullPointerException("interceptor == null");
+            }
+            okhttpBuilder.addNetworkInterceptor(interceptor);
+            return this;
+        }
+
+        /**
+         * setCache
+         *
+         * @param cache cahe
+         * @return Builder
+         */
+        public Builder addCache(Cache cache) {
+            return addCache(cache, cacheTimeout);
+        }
+
+        /**
+         * @param cache
+         * @param cacheTimeOut ms
+         * @return
+         */
+        public Builder addCache(Cache cache, final int cacheTimeOut) {
+            addCache(cache, String.format("max-age=%d", cacheTimeOut));
+            return this;
+        }
+
+        /**
+         * @param cache
+         * @param cacheControlValue Cache-Control
+         *                          def max-age=
+         * @return
+         */
+        private Builder addCache(Cache cache, final String cacheControlValue) {
+            REWRITE_CACHE_CONTROL_INTERCEPTOR = new CacheInterceptor(mContext, cacheControlValue);
+            REWRITE_CACHE_CONTROL_INTERCEPTOR_OFFLINE = new CacheInterceptorOffline(mContext, cacheControlValue);
+            addNetworkInterceptor(REWRITE_CACHE_CONTROL_INTERCEPTOR);
+            addNetworkInterceptor(REWRITE_CACHE_CONTROL_INTERCEPTOR_OFFLINE);
+            addInterceptor(REWRITE_CACHE_CONTROL_INTERCEPTOR_OFFLINE);
+            this.cache = cache;
+            return this;
+        }
+
+        /**
+         * Create the {@link Retrofit} instance using the configured values.
+         * <p/>
+         * Note: If neither {@link #client} nor {@link #callFactory} is called a default {@link
+         * OkHttpClient} will be created and used.
+         */
+        public Novate build() {
+
+            if (baseUrl == null) {
+                throw new IllegalStateException("Base URL required.");
+            }
+
+            if (okhttpBuilder == null) {
+                throw new IllegalStateException("okhttpBuilder required.");
+            }
+
+            if (retrofitBuilder == null) {
+                throw new IllegalStateException("retrofitBuilder required.");
+            }
+            /** set Context. */
+            mContext = context;
+            /**
+             * ConfigLoader.init.
+             * */
+            ConfigLoader.init(context);
+            /**
+             * Set a fixed API base URL.
+             *
+             * @see #baseUrl(HttpUrl)
+             */
+            retrofitBuilder.baseUrl(baseUrl);
+
+            /** Add converter factory for serialization and deserialization of objects. */
+            if (converterFactory == null) {
+                converterFactory = GsonConverterFactory.create();
+            }
+
+            retrofitBuilder.addConverterFactory(converterFactory);
+            /**
+             * Add a call adapter factory for supporting service method return types other than {@link
+             * Call}.
+             */
+            if (callAdapterFactory == null) {
+                callAdapterFactory = RxJava2CallAdapterFactory.create();
+            }
+            retrofitBuilder.addCallAdapterFactory(callAdapterFactory);
+
+            LogWraper.setDebug(isLog && !BuildConfig.DEBUG);
+
+            if (tag != null) {
+                okhttpBuilder.addInterceptor(new RequestInterceptor<>(tag));
+            }
+
+            if (isLog) {
+                okhttpBuilder.addNetworkInterceptor(
+                        new HttpLoggingInterceptor().setLevel(HttpLoggingInterceptor.Level.HEADERS));
+
+                okhttpBuilder.addNetworkInterceptor(
+                        new HttpLoggingInterceptor().setLevel(HttpLoggingInterceptor.Level.BODY));
+            }
+
+            if (isSkip) {
+                okhttpBuilder.sslSocketFactory(NovateHttpsFactroy.getSSLSocketFactory(),
+                        NovateHttpsFactroy.creatX509TrustManager());
+
+                okhttpBuilder.hostnameVerifier(NovateHttpsFactroy.creatSkipHostnameVerifier());
+            }
+
+            if (!isSkip && sslSocketFactory != null) {
+                okhttpBuilder.sslSocketFactory(sslSocketFactory, NovateHttpsFactroy.creatX509TrustManager());
+            }
+
+            if (hostnameVerifier != null) {
+                okhttpBuilder.hostnameVerifier(hostnameVerifier);
+            }
+
+            if (httpCacheDirectory == null) {
+                httpCacheDirectory = new File(mContext.getCacheDir(), KEY_CACHE);
+            }
+
+            if (isCache) {
+                try {
+                    if (cache == null) {
+                        cache = new Cache(httpCacheDirectory, cacheMaxSize);
+                    }
+                    addCache(cache);
+
+                } catch (Exception e) {
+                    Log.e("OKHttp", "Could not create http cache", e);
+                }
+                if (cache == null) {
+                    cache = new Cache(httpCacheDirectory, cacheMaxSize);
+                }
+            }
+
+            if (cache != null) {
+                okhttpBuilder.cache(cache);
+            }
+            /**
+             * Sets the default write timeout for new connections. A value of 0 means no timeout, otherwise
+             * values must be between 1 and {@link Integer#MAX_VALUE} when converted to milliseconds.
+             */
+
+            //okhttpBuilder.writeTimeout(writeTimeout, TimeUnit.SECONDS);
+            /**
+             * Sets the default connect timeout for new connections. A value of 0 means no timeout,
+             * otherwise values must be between 1 and {@link Integer#MAX_VALUE} when converted to
+             * milliseconds.
+             */
+            //okhttpBuilder.connectTimeout(connectTimeout, TimeUnit.SECONDS);
+            /**
+             * Sets the default read timeout for new connections. A value of 0 means no timeout, otherwise
+             * values must be between 1 and {@link Integer#MAX_VALUE} when converted to milliseconds.
+             */
+            //okhttpBuilder.readTimeout(readTimeout, TimeUnit.SECONDS);
+            /**
+             * Sets the connection pool used to recycle HTTP and HTTPS connections.
+             *
+             * <p>If unset, a new connection pool will be used.
+             */
+            if (connectionPool == null) {
+                connectionPool = new ConnectionPool(default_maxidle_connections, default_keep_aliveduration, TimeUnit.SECONDS);
+            }
+            okhttpBuilder.connectionPool(connectionPool);
+
+            /**
+             * Sets the HTTP proxy that will be used by connections created by this client. This takes
+             * precedence over {@link #proxySelector}, which is only honored when this proxy is null (which
+             * it is by default). To disable proxy use completely, call {@code setProxy(Proxy.NO_PROXY)}.
+             */
+            if (proxy != null) {
+                okhttpBuilder.proxy(proxy);
+            }
+
+            /**
+             * Sets the handler that can accept cookies from incoming HTTP responses and provides cookies to
+             * outgoing HTTP requests.
+             *
+             * <p>If unset, {@link Novate NovateCookieManager#NO_COOKIES no cookies} will be accepted nor provided.
+             */
+            if (isCookie && cookieManager == null) {
+                okhttpBuilder.cookieJar(new NovateCookieManager(new CookieCacheImpl(), new SharedPrefsCookiePersistor(context)));
+
+            }
+
+            if (isCookie) {
+                /**
+                 * Returns a modifiable list of interceptors that observe a single network request and response.
+                 * These interceptors must call {@link Interceptor.Chain#proceed} exactly once: it is an error
+                 * for a network interceptor to short-circuit or repeat a network request.
+                 */
+                okhttpBuilder.addInterceptor(new ReceivedCookiesInterceptor(context));
+                okhttpBuilder.addInterceptor(new AddCookiesInterceptor(context, ""));
+            }
+
+            if (cookieManager != null) {
+                okhttpBuilder.cookieJar(cookieManager);
+            }
+
+            /**
+             *okhttp3.Call.Factory callFactory = this.callFactory;
+             */
+            if (callFactory != null) {
+                retrofitBuilder.callFactory(callFactory);
+            }
+
+
+            /**
+             * create okHttpClient
+             */
+            okHttpClient = okhttpBuilder.build();
+            /**
+             * set Retrofit client
+             */
+
+            retrofitBuilder.client(okHttpClient);
+
+            /**
+             * create Retrofit
+             */
+            retrofit = retrofitBuilder.build();
+
+            /**
+             *create BaseApiService;
+             */
+            apiManager = retrofit.create(BaseApiService.class);
+
+            return new Novate(callFactory, baseUrl, headers, parameters, apiManager, converterFactories, adapterFactories,
+                    callbackExecutor, validateEagerly);
+        }
+    }
+
+
+    /**
+     * Retry
+     */
+    public class RetryWithDelay implements
+            Function<Observable<? extends Throwable>, Observable<?>> {
+
+        private final int maxRetries;
+        private final int retryDelayMillis;
+        private int retryCount;
+
+        public RetryWithDelay(int maxRetries, int retryDelayMillis) {
+            this.maxRetries = maxRetries;
+            this.retryDelayMillis = retryDelayMillis;
+        }
+
+        @Override
+        public Observable<?> apply(Observable<? extends Throwable> observable) throws Exception {
+            return observable.flatMap(new Function<Throwable, ObservableSource<?>>() {
+                @Override
+                public ObservableSource<?> apply(Throwable throwable) throws Exception {
+                    if (++retryCount <= maxRetries) {
+                        // When this Observable calls onNext, the original Observable will be retried (i.e. re-subscribed).
+                        LogWraper.e("tamic", "Novate get error, it will try after " + retryDelayMillis
+                                + " millisecond, retry count: " + retryCount);
+                        return Observable.timer(retryDelayMillis,
+                                TimeUnit.MILLISECONDS);
+                    }
+                    // Max retries hit. Just pass the error along.
+                    return Observable.error(throwable);
+                }
+            });
+        }
+    }
+}
+
+

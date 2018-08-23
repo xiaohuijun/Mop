@@ -1,0 +1,1 @@
+include ':app', ':MopFrameworkCore', ':MopUiCore', ':MopShare'
