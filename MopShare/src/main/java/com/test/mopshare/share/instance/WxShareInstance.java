@@ -182,7 +182,7 @@ public class WxShareInstance implements IShareInstance {
                         message.description = shareInfo.getSummary();
                         message.thumbData = pair.second;
                         pair.first.recycle();
-                        sendMessage(message, buildTransaction("img"), shareInfo.getPlatform());
+                        sendMessage(message, "img", shareInfo.getPlatform());
                     }
                 }, new Consumer<Throwable>() {
                     @Override
